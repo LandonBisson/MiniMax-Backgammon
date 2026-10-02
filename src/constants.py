@@ -3,7 +3,7 @@
 from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-from utilities import create_triangle
+from src.utilities import create_triangle
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -57,3 +57,5 @@ TRIANGLE_SHAPE = create_triangle(CELL_SIZE//2,HEIGHT//2)
 TOKEN_WIDTH = 50
 
 DICE_WIDTH = 60
+
+NUM_TOKENS_PER_PLAYER = 15
