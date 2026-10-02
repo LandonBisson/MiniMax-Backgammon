@@ -1,8 +1,8 @@
 
-import constants
-from player_base import Player
+from . import constants
+from src.player_base import Player
 
-"""
+"""git config --global user.name "Your Name"
 human_player.py
 
 HumanPlayer converts mouse input (x, y pixel coordinates) into a board move (row, col).
