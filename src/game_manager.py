@@ -33,8 +33,9 @@ possible_moves = []
 
 class GameState(Enum):
     PLAYING = 0     # game is active, moves are still being applied
-    GAME_OVER = 1   # a player has won the game, or game ended in a tie
-    RESET = 2       # waiting to reset (waiting to start a new game)
+    STUCK = 1       # current player has no possible moves, turn is switched
+    GAME_OVER = 2   # a player has won the game, or game ended in a tie
+    RESET = 3       # waiting to reset (waiting to start a new game)
 
 
 class GameManager:
@@ -48,6 +49,8 @@ class GameManager:
 
         self.current_player = self.player1
         self.game_state = GameState.PLAYING
+
+        self.turn = 0
 
 
     def update(self, pending_move):
@@ -73,18 +76,37 @@ class GameManager:
 
         if self.game_state != GameState.PLAYING:
             return
+
+        self.update_scores()
+        self.update_jail()
+        # if self.board.check_winner() is not None:
+        #     self.game_state = GameState.GAME_OVER
+
         #convert pending move into a board space
         if self.current_player.is_ai_player:
             chosen_move = self.current_player.choose_move(self.board, dice_rolls)
+            # print("chosen_move:", chosen_move, "dice:",dice_rolls)
         else:
             chosen_move = self.current_player.choose_move(self.board, pending_move)
         #dice need to roll
         if current_stage == 0:
-            if move_within_bounds(pending_move,(constants.BOARD_CENTER_X*.085, constants.BOARD_CENTER_Y),
-                                  (constants.DICE_WIDTH,constants.DICE_WIDTH)) or self.current_player.is_ai_player:
+            if self.current_player.is_ai_player or move_within_bounds(pending_move,(constants.BOARD_CENTER_X*.085, constants.BOARD_CENTER_Y),
+                                  (constants.DICE_WIDTH,constants.DICE_WIDTH)):
                 dice_rolls = roll_dice()
-                print("DICE:",dice_rolls)
+                # print("DICE:",dice_rolls)
                 current_stage += 1
+        elif current_stage == 1 and not self.board.get_possible_moves(dice_rolls, self.current_player.identifier):
+            
+            # Will pause and show "No Possible Moves!" if theres a human player
+            if self.player1.is_ai_player and self.player2.is_ai_player:
+                self.switch_turn()
+            else:
+                self.game_state = GameState.STUCK 
+
+        elif current_stage == 1 and self.is_current_player_in_jail():
+            select_tile = (int((self.current_player.identifier + 1) / 2), -2)
+            current_stage += 1
+
         elif (current_stage == 1 and
               self.board.is_move_valid(chosen_move, self.current_player.identifier, not self.current_player.is_ai_player)):
             # print("Stage", current_stage)
@@ -93,34 +115,29 @@ class GameManager:
             select_tile = chosen_move
         #pick select tile
         elif current_stage == 2 and self.current_player.is_ai_player:
-                if dice_rolls[chosen_move[-1]][-1]:
+            if dice_rolls[chosen_move[-1]][-1]:
+                # gets rid of the piece the player was on
+                remove_move = self.current_player.get_the_remove_the_select_move(dice_rolls,chosen_move[-1],(chosen_move[0],chosen_move[1]),self.current_player.identifier)
+                
+                # applies the new piece move
+                if self.board.apply_move(chosen_move, self.current_player.identifier):
+                    # DICE HAS BEEN USED (after we calc remove move correct)
+                    dice_rolls[chosen_move[-1]][-1] = False
+                    # print("Chosen move", chosen_move, "remove_move", remove_move)
+                    if remove_move is not None:
+                        self.board.game_board[remove_move[0]][remove_move[1]] -= self.current_player.identifier
 
-                    # print("Removed 1 dice:",dice_rolls)
-                    # gets rid of the piece the player was on
-                    remove_move = self.current_player.get_the_remove_the_select_move(dice_rolls,chosen_move[-1],(chosen_move[0],chosen_move[1]),self.current_player.identifier)
-                    #applies the new piece move
-                    if self.board.apply_move(chosen_move, self.current_player.identifier):
-                        # DICE HAS BEEN USED (after we calc remove move correct)
-                        dice_rolls[chosen_move[-1]][-1] = False
-                        print("Chosen move", chosen_move, "remove_move", remove_move)
-                        if remove_move is not None:
-                            self.board.game_board[remove_move[0]][remove_move[1]] -= self.current_player.identifier
+                    # if self.board.check_winner() is not None:
+                    #     self.update_ai_player_testing_diagnostics(self.current_player.identifier)
 
-                        if self.board.check_winner() is not None:
-                            self.game_state = GameState.GAME_OVER
-                        no_more_dice = True
-                        for i in range(len(dice_rolls)):
-                            if dice_rolls[i][-1]:
-                                no_more_dice = False
-                                current_stage = 1
-                                break
-                        if no_more_dice:
-                            # resets everything for the next players turn
-                            self.current_player = self.player2 if self.current_player == self.player1 else self.player1
-                            dice_rolls = None
-                            chosen_move = None
-                            select_tile = None
-                            current_stage = 0
+                    no_more_dice = True
+                    for i in range(len(dice_rolls)):
+                        if dice_rolls[i][-1]:
+                            no_more_dice = False
+                            current_stage = 1
+                            break
+                    if no_more_dice:
+                        self.switch_turn()
 
         elif current_stage == 2:
             # if you pressed on the same tile as the select tile, restart the selection process
@@ -136,25 +153,34 @@ class GameManager:
                 # would fall off the dge o the board
                 if not dice_rolls[i][-1]:
                     continue
-                if len(possible_moves) < 2:
-                    move = None
+                
+                identifier = int((self.current_player.identifier + 1) / 2)  # will get 0 and 1 for black and white respectively
 
-                    identifier = int((self.current_player.identifier + 1) / 2)  # will get 0 and 1 for black and white respectively
-                    if select_tile[0] == abs(identifier - 1) and select_tile[1] - dice_rolls[i][0] < 0:
-                        move = (identifier, abs(select_tile[1] - dice_rolls[i][0])-1)
-                    elif select_tile[0] == abs(identifier - 1):
-                        move = (abs(identifier - 1), select_tile[1] - dice_rolls[i][0])
+                # If piece is in jail, must move out of jail first
+                if self.get_game_board()[identifier][-2] != 0: 
+
+                    # Piece has to move somewhere on row 0 or 1 for player 1 and player 2 respectively
+                    # abs(identifier - 1) = 0 for player 1, 1 for player 2
+                    move = (abs(identifier - 1), constants.NUM_COLS - dice_rolls[i][0], i) 
+
+                    if not self.board.is_move_valid(move, self.current_player.identifier):
+                        move = None
+
+                elif select_tile[0] == abs(identifier - 1) and select_tile[1] - dice_rolls[i][0] < 0:
+                    move = (identifier, abs(select_tile[1] - dice_rolls[i][0])-1)
+                elif select_tile[0] == abs(identifier - 1):
+                    move = (abs(identifier - 1), select_tile[1] - dice_rolls[i][0])
+                else:
+                    col = select_tile[1] + dice_rolls[i][0]
+                    if col > constants.NUM_COLS:
+                        move = (identifier, constants.NUM_COLS)
                     else:
-                        col = select_tile[1] + dice_rolls[i][0]
-                        if col > constants.NUM_COLS:
-                            move = (identifier, constants.NUM_COLS)
-                        else:
-                            move = (identifier, select_tile[1] + dice_rolls[i][0])
+                        move = (identifier, select_tile[1] + dice_rolls[i][0])
 
-                    if move is not None and self.board.is_move_valid(move, self.current_player.identifier):
-                        possible_moves.append((move[0], move[1], i))
-
-            # print("possible moves:",possible_moves)
+                if move is not None and self.board.is_move_valid(move, self.current_player.identifier):
+                    candidate = (move[0], move[1], i)
+                    if candidate not in possible_moves:
+                        possible_moves.append(candidate)
 
             # check to see if the possible moves are the chosen move, then make that the select tile.
             for i in range(len(possible_moves)):
@@ -167,8 +193,8 @@ class GameManager:
                     self.board.game_board[select_tile[0]][select_tile[1]] -= self.current_player.identifier
                     #applies the new piece move
                     if self.board.apply_move(move_tile, self.current_player.identifier):
-                        if self.board.check_winner() is not None:
-                            self.game_state = GameState.GAME_OVER
+                        # if self.board.check_winner() is not None:
+                        #     self.game_state = GameState.GAME_OVER
 
                         no_more_dice = True
                         for i in range(len(dice_rolls)):
@@ -180,16 +206,9 @@ class GameManager:
                                 possible_moves = []
                                 break
                         if no_more_dice:
-                            # resets everything for the next players turn
-                            self.current_player = self.player2 if self.current_player == self.player1 else self.player1
-                            current_stage = 1
-                            select_tile = None
-                            move_tile = None
-                            possible_moves = []
-                            dice_rolls = None
-                            current_stage = 0
+                            self.switch_turn()
+
                     break
-            # then make the switch
             # get the tile you are moving to
         #see if all the dice are used
         else:
@@ -197,6 +216,42 @@ class GameManager:
                 current_stage = 0
             else:
                 current_stage = 1
+
+    def update_scores(self):
+        player1_score, player2_score = self.board.get_scores()
+        self.player1.score = player1_score
+        self.player2.score = player2_score
+
+    def update_jail(self):
+        if self.board.game_board[1][-2] > 0:
+            self.player1.in_jail = True
+        else:
+            self.player1.in_jail = False
+
+        if self.board.game_board[0][-2] < 0:
+            self.player2.in_jail = True
+        else:
+            self.player2.in_jail = False
+
+    def switch_turn(self) -> None:
+        # print(self.turn, self.board.game_board)
+        # self.turn = self.turn+1
+        if self.board.check_winner() is not None:
+            self.game_state = GameState.GAME_OVER # change orde of these lines?
+            self.update_scores()
+            self.update_ai_player_testing_diagnostics(self.current_player.identifier)
+            return
+
+        global current_stage, select_tile, move_tile, possible_moves, dice_rolls
+
+        self.current_player = self.player2 if self.current_player == self.player1 else self.player1
+        current_stage = 0
+        select_tile = None
+        move_tile = None
+        possible_moves = []
+        dice_rolls = None
+
+        self.game_state = GameState.PLAYING
 
     def update_ai_player_testing_diagnostics(self, winning_player_identifier):
         if winning_player_identifier == "Tie":
@@ -226,6 +281,12 @@ class GameManager:
 
     def is_player_two_turn(self):
         return self.current_player == self.player2
+
+    def is_current_player_in_jail(self):
+        if self.current_player == self.player1:
+            return self.player1.in_jail
+        else:
+            return self.player2.in_jail
 
     def player_one_won(self):
         winner = self.board.check_winner()
@@ -263,3 +324,5 @@ class GameManager:
     def current_player(self):
         return self.current_player
 
+    def get_scores(self):
+        return self.board.get_scores()
