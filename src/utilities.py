@@ -333,4 +333,3 @@ def stop_music():
     :return:
     """
     pygame.mixer.music.stop()
-
