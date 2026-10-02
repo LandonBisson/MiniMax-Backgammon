@@ -3,10 +3,9 @@ import random
 
 import numpy as np
 
-from player_base import Player
-from board import Board
+from src.player_base import Player
+from src.board import Board
 from src import constants
-from src.game_manager import possible_moves
 
 """
 ai_player.py
@@ -32,7 +31,7 @@ class AIPlayer(Player):
         super().__init__(is_player_one)
         self.is_ai_player = True
         self.choose_random_move = choose_random_move
-        self.max_move_look_ahead = 3
+        self.max_move_look_ahead = 2
 
         self.testing_diagnostics = {
             "wins": 0,
@@ -42,9 +41,13 @@ class AIPlayer(Player):
 
     def choose_move(self, board, dice_roll) -> tuple[int, int] | None:
         possible_moves = board.get_possible_moves(dice_roll,self.identifier)
-        if self.choose_random_move and possible_moves is not None:
+        
+        if not self.choose_random_move:
+            return self.find_best_move(board,dice_roll)
+        elif possible_moves is not None and possible_moves != []:
             return random.choice(possible_moves)
-        return self.find_best_move(board,dice_roll)
+        return None
+
 
     def find_best_move(self, board, dice_rolls) -> tuple[int, int] | None:
         # this method will act as a maximizer for top level in minimax tree
@@ -66,8 +69,7 @@ class AIPlayer(Player):
             board_copy.game_board[remove_move[0]][remove_move[1]] -= self.identifier
             # move through game tree using mini max
             score = self.minimax(board_copy, False, opponent_identifier, dice_rolls,0, float("-inf"), float("inf"))
-
-            if score > max_score:
+            if score > max_score: # >= might be a stupid fix
                 max_score = score
                 best_move = (move[0],move[1],dice_index_used)
 
@@ -81,14 +83,15 @@ class AIPlayer(Player):
         score = 0
         # base evaluate for win, this should be heavily weighted because wins take a while to get to
         winner_identifier = board.check_winner()
-        if winner_identifier == self.identifier:
-            return 20 - depth
-        elif winner_identifier == opponent_identifier:
-            return -20 + depth
+        if winner_identifier is not None:
+            if winner_identifier == self.identifier:
+                return 20 - depth
+            elif winner_identifier == opponent_identifier:
+                return -20 + depth
         #TODO: TEST THIS CODE
-        one_dimension_board = self.get_one_dimension_board(copy.deepcopy(board))
-        # its actually not bad for pieces to be single right now (make it negative for reward)
-        SINGLE_PIECE_PUNISHMENT = -5
+        one_dimension_board = self.get_one_dimension_board(copy.deepcopy(board.game_board))
+
+        SINGLE_PIECE_PUNISHMENT = 5
         JAIL_PUNISHMENT = 10
         SCORE_CHANGE_PER_PIECE = 1 / 20
         black_score = 0
@@ -111,20 +114,25 @@ class AIPlayer(Player):
             black_score -= SCORE_CHANGE_PER_PIECE
             # this is decreasing because we start out at the spot that has the max points for the maximizer
             white_score -= SCORE_CHANGE_PER_PIECE
-        # if self.is_player_one and self.in_jail:
-        #     score -= JAIL_PUNISHMENT
-        # elif not self.is_player_one and self.in_jail:
-        #     score += JAIL_PUNISHMENT
+        if self.is_player_one and self.in_jail:
+            score -= JAIL_PUNISHMENT
+        elif not self.is_player_one and self.in_jail:
+            score += JAIL_PUNISHMENT
 
         # depth limit is hit, retyurn score
         if depth >= self.max_move_look_ahead:
             return score
 
         return None
-    def get_one_dimension_board(self, board):
-        right_side = board.game_board[0]
-        left_side = np.flip(board.game_board[1])
-        return left_side + right_side
+    # def get_one_dimension_board(self, board):
+    #     right_side = board.game_board[0]
+    #     left_side = np.flip(board.game_board[1])
+    #     return left_side + right_side
+
+    def get_one_dimension_board(self, game_board):
+        right_side = game_board[0][:-2]
+        left_side = np.flip(game_board[1][:-2])
+        return np.concatenate((left_side, right_side))
 
     def minimax(self, board, is_maximizing, opponent_identifier,dice_roll, depth: int = 0, alpha=float("-inf"),
                 beta=float("inf")) -> float:
@@ -153,7 +161,7 @@ class AIPlayer(Player):
                 max_score = max(score, max_score)
                 alpha = max(alpha, score)
                 if alpha >= beta:
-                    print("Pruning")
+                    # print("Pruning")
                     break
 
             return max_score
@@ -174,7 +182,7 @@ class AIPlayer(Player):
                 min_score = min(score, min_score)
                 beta = min(beta, score)
                 if alpha >= beta:
-                    print("Pruning")
+                    # print("Pruning")
                     break
 
             return min_score
@@ -183,23 +191,30 @@ class AIPlayer(Player):
         roll = dice_rolls[dice_index_used][0]
         row, col = move
         identifier = int((og_identifier + 1) / 2)  # 0 for black, 1 for white
-        other_row = abs(identifier - 1)
+        other_row = abs(identifier - 1) # 1 for black, 0 for white
+
+        if og_identifier > 0 and row == 0 and col+roll>= constants.NUM_COLS: # player 1 was in jail
+            return 1, -2
+
+        if og_identifier < 0 and row == 1 and col+roll>= constants.NUM_COLS: # player 2 was in jail
+            return 0, -2
+
         # if row is 1 and black  or row is 1 and white (we need right movement for each of these cases)
         if (row == 0 and og_identifier == constants.PLAYER_1_IDENTIFIER) or (row == 1 and og_identifier == constants.PLAYER_2_IDENTIFIER):
             src_col = col + roll
             # jumping over board
             if src_col < 0:
-                print("JUMP remove 1")
+                # print("JUMP remove 1")
                 return identifier, abs(src_col) - 1
             # moving towards jumping WORKING
-            print("MOVE TOWARDS JUMP remove 2")
+            # print("MOVE TOWARDS JUMP remove 2")
             return other_row, src_col
         #passed the jumping portion but the roll might be
         src_col = col - roll
         if src_col < 0:
-            print("PASSED JUMP remove last row remove 3")
+            # print("PASSED JUMP remove last row remove 3")
             return other_row, abs(src_col) - 1
-        print("PASSED JUMP remove 4")
+        # print("PASSED JUMP remove 4")
         return identifier, src_col
 
 
@@ -216,4 +231,3 @@ class AIPlayer(Player):
         print(f"AI mode: {ai_mode}")
         print(
             f"wins: {self.testing_diagnostics["wins"]}, losses: {self.testing_diagnostics["losses"]}, ties: {self.testing_diagnostics["ties"]}")
-
